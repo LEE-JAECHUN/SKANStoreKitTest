@@ -21,11 +21,15 @@
 }
 
 - (IBAction)showStoreKitVC:(id)sender {
-    [self loadProduct:@"535886823"/*Google Chrome*/];
+    // 880047117 : Angry Bird2
+    // 364709193 : Google Chrome
+    [self loadProduct:@"880047117"];
 }
 
 - (IBAction)showOverlay:(id)sender {
-    [self showOverlayItem:@"535886823"];
+    // 880047117 : Angry Bird2
+    // 364709193 : Google Chrome
+    [self showOverlayItem:@"880047117"];
 }
 
 - (IBAction)dismissOverlay:(id)sender {
