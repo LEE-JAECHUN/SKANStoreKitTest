@@ -68,20 +68,37 @@
     }
     
     
-    SKStoreProductViewController *storeKitVC = [[SKStoreProductViewController alloc] init];
+    __block SKStoreProductViewController *storeKitVC = [[SKStoreProductViewController alloc] init];
     storeKitVC.delegate = self;
     NSDictionary *dict = @{ SKStoreProductParameterITunesItemIdentifier : itemID, };
     
     // waiting for two responses
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
         NSLog(@"dispatch_group_notify");
-        __block BOOL timedOut = YES;
+        __block BOOL timedOut = NO;
+        dispatch_block_t timeoutWorkItem = dispatch_block_create(0, ^(){
+            timedOut = YES;
+            NSLog(@"timeout");
+            /// 스토어 키트 창 닫기
+            [storeKitVC dismissViewControllerAnimated:YES completion:nil];
+            storeKitVC = nil;
+        });
+        
+        /// iTunesItem 식별자에 매칭되는 데이터가 없을 경우, 지정된 시간 (3초) 이내  타임아웃 플래그가 NO로 설정되지 않으면, 스토어 키트 VC를 닫고 에러 전달
+        if(![resultArray count]) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), timeoutWorkItem);
+        }
+        
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
             /// loadProductWithParameters
             [storeKitVC loadProductWithParameters:dict completionBlock:^(BOOL result, NSError * _Nullable error) {
-                timedOut = NO;
+                dispatch_block_cancel(timeoutWorkItem);
                 __strong typeof(self) strongSelf = weakSelf;
                 if(!strongSelf) { return; }
+                if(timedOut) {
+                    [strongSelf appendToMyTextView:[NSString stringWithFormat:@"timeout"]];
+                    return;
+                }
                 if(error) {
                     [strongSelf appendToMyTextView:[NSString stringWithFormat:@"loadProductWithParameters error: %@", error]];
                     return;
@@ -89,16 +106,6 @@
                 [strongSelf appendToMyTextView: result ? @"YES" : @"NO"];
             }];
         });
-        
-        /// iTunesItem 식별자에 매칭되는 데이터가 없을 경우, 지정된 시간 (3초) 이내  타임아웃 플래그가 NO로 설정되지 않으면, 스토어 키트 VC를 닫고 에러 전달
-        if(![resultArray count]) {
-            /// 타임아웃 3초
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                if(!timedOut) { return; }
-                /// 스토어 키트 창 닫기
-                [storeKitVC dismissViewControllerAnimated:YES completion:nil];
-            });
-        }
         
         __strong typeof(self) strongSelf = weakSelf;
         if(!strongSelf) { return; }
