@@ -49,26 +49,37 @@
 
 - (void)loadProduct:(NSString *) itemID{
     
+    __weak typeof(self) weakSelf = self;
+    NSMutableArray<NSData *> *resultArray = [NSMutableArray array];
+    
+    /// Check  with the contry codes
+    dispatch_group_t group = dispatch_group_create();
+    NSArray *contryCodes = @[@"",[[NSLocale currentLocale] objectForKey:NSLocaleCountryCode]];
+    for (NSString *contryCode in contryCodes) {
+        dispatch_group_enter(group);
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            __strong typeof(self) strongSelf = weakSelf;
+            if(!strongSelf) { dispatch_group_leave(group); return; }
+            [strongSelf lookUpStoreItemById:itemID contryCode:contryCode completion:^(NSData * data, NSError * error) {
+                if(data != nil) { [resultArray addObject:data]; }
+                dispatch_group_leave(group);
+            }];
+        });
+    }
+    
+    
     SKStoreProductViewController *storeKitVC = [[SKStoreProductViewController alloc] init];
     storeKitVC.delegate = self;
+    NSDictionary *dict = @{ SKStoreProductParameterITunesItemIdentifier : itemID, };
     
-    NSDictionary *dict = @{
-        SKStoreProductParameterITunesItemIdentifier : itemID,   // Google Chrome
-    };
-    
-    __weak typeof(self) weakSelf = self;
-    
-    [self lookUpStoreItemById:itemID completion:^(NSData * data, NSError * error) {
-        // itemID 유효성 검증
-        // 참조: https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/LookupExamples.html
-        if(error) { return; }
-        NSError *jsonError = nil;
-        NSDictionary *resDict = [NSJSONSerialization JSONObjectWithData:data options:kNilOptions error:&jsonError];
-        if(resDict[@"resultCount"] == nil) { return; }
-        if([resDict[@"resultCount"] integerValue] <= 0) { return; }
-        
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    // waiting for two responses
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        NSLog(@"dispatch_group_notify");
+        __block BOOL timedOut = YES;
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            /// loadProductWithParameters
             [storeKitVC loadProductWithParameters:dict completionBlock:^(BOOL result, NSError * _Nullable error) {
+                timedOut = NO;
                 __strong typeof(self) strongSelf = weakSelf;
                 if(!strongSelf) { return; }
                 if(error) {
@@ -79,13 +90,25 @@
             }];
         });
         
+        /// iTunesItem 식별자에 매칭되는 데이터가 없을 경우, 지정된 시간 (3초) 이내  타임아웃 플래그가 NO로 설정되지 않으면, 스토어 키트 VC를 닫고 에러 전달
+        if(![resultArray count]) {
+            /// 타임아웃 3초
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                if(!timedOut) { return; }
+                /// 스토어 키트 창 닫기
+                [storeKitVC dismissViewControllerAnimated:YES completion:nil];
+            });
+        }
+        
         __strong typeof(self) strongSelf = weakSelf;
         if(!strongSelf) { return; }
         [strongSelf appendToMyTextView:[NSString stringWithFormat: @"present storeKitVC (%@)", itemID]];
-        /// iOS 특정 버전에서는 스토어 키트를 present 를 해야지만, loadProductWithParameters의 completionBlock 호출 됨.
+        
+        /// presentViewController
+        /// 특정 버전에서는 스토어 키트를 present 를 해야지만, loadProductWithParameters의 completionBlock 호출 됨.
         /// 버전 호환성을 위해서 loadProductWithParameters 호출 후, 이어서 바로 presentViewController 호출.
         [strongSelf presentViewController:storeKitVC animated:YES completion:nil];
-    }];
+    });
 }
 
 
@@ -126,23 +149,46 @@
     }
 }
 
-- (void)lookUpStoreItemById:(NSString *)itemIdentifier completion:(void(^)(NSData *, NSError *))completionHandler {
+- (void)lookUpStoreItemById:(NSString *)itemIdentifier
+                 contryCode:(NSString *)contryCode
+                 completion:(void(^)(NSData *, NSError *))completionHandler
+{
+    // itunesitem 유효성 검증
+    // 참조: https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/LookupExamples.html
     NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"https://itunes.apple.com/lookup?id=%@", itemIdentifier]];
+    if([contryCode length]) {
+        url = [NSURL URLWithString:[NSString stringWithFormat:@"https://itunes.apple.com/lookup?id=%@&country=%@", itemIdentifier, contryCode]];
+    }
     NSURLSessionConfiguration *sessionConfig = [NSURLSessionConfiguration defaultSessionConfiguration];
-    sessionConfig.timeoutIntervalForRequest = 3.0;
-    sessionConfig.timeoutIntervalForResource = 3.0;
+    sessionConfig.timeoutIntervalForRequest = 2.5;
+    sessionConfig.timeoutIntervalForResource = 2.5;
     NSURLSession *session = [NSURLSession sessionWithConfiguration:sessionConfig];
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     [request setCachePolicy:NSURLRequestReloadIgnoringCacheData]; // No-Cache
-    [request setTimeoutInterval:3.0];
+    [request setTimeoutInterval:2.5];
     [[session dataTaskWithRequest:request
                 completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        if (completionHandler) {
-            // 메인 쓰레드에서 실행
-            dispatch_async(dispatch_get_main_queue(), ^{
-                completionHandler(data, error);
-            });
+        /// There was an exception.
+        if(error != nil) {
+            completionHandler(nil, error);
+            return;
         }
+        NSError *jsonError = nil;
+        NSDictionary *resDict = [NSJSONSerialization JSONObjectWithData:data options:kNilOptions error:&jsonError];
+        /// ERROR CASE #1
+        if(resDict[@"resultCount"] == nil) {
+            NSLog(@"resDict: %@", resDict);
+            completionHandler(nil, error);
+            return;
+        }
+        /// ERROR CASE #2
+        NSLog(@"resDict: %ld", [resDict[@"resultCount"] integerValue]);
+        if([resDict[@"resultCount"] integerValue] <= 0) {
+            completionHandler(nil, error);
+            return;
+        }
+        /// Success
+        completionHandler(data, nil);
     }] resume];
 }
 
