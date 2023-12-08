@@ -38,7 +38,6 @@
 
 
 - (void)appendToMyTextView:(NSString*)text {
-    NSLog(@"%@", text);
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString *stringWithLineFeeds = [NSString stringWithFormat:@"%@\n", text];
         NSAttributedString* attr = [[NSAttributedString alloc] initWithString:stringWithLineFeeds];
@@ -78,15 +77,15 @@
         __block BOOL timedOut = NO;
         dispatch_block_t timeoutWorkItem = dispatch_block_create(0, ^(){
             timedOut = YES;
-            NSLog(@"timeout");
-            /// 스토어 키트 창 닫기
-            [storeKitVC dismissViewControllerAnimated:YES completion:nil];
-            storeKitVC = nil;
+            __strong typeof(self) strongSelf = weakSelf;
+            if(strongSelf){
+                [strongSelf appendToMyTextView:[NSString stringWithFormat:@"timeout"]];
+            }
         });
         
-        /// iTunesItem 식별자에 매칭되는 데이터가 없을 경우, 지정된 시간 (3초) 이내  타임아웃 플래그가 NO로 설정되지 않으면, 스토어 키트 VC를 닫고 에러 전달
+        /// iTunesItem 식별자에 매칭되는 데이터가 없을 경우, 지정된 시간 (2초) 이내  타임아웃 이벤트 발생
         if(![resultArray count]) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), timeoutWorkItem);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), timeoutWorkItem);
         }
         
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
@@ -94,27 +93,17 @@
             [storeKitVC loadProductWithParameters:dict completionBlock:^(BOOL result, NSError * _Nullable error) {
                 dispatch_block_cancel(timeoutWorkItem);
                 __strong typeof(self) strongSelf = weakSelf;
-                if(!strongSelf) { return; }
-                if(timedOut) {
-                    [strongSelf appendToMyTextView:[NSString stringWithFormat:@"timeout"]];
-                    return;
-                }
-                if(error) {
+                if(!strongSelf || timedOut) { return; }
+                if(error || result == NO) {
                     [strongSelf appendToMyTextView:[NSString stringWithFormat:@"loadProductWithParameters error: %@", error]];
                     return;
                 }
-                [strongSelf appendToMyTextView: result ? @"YES" : @"NO"];
+                [strongSelf appendToMyTextView:[NSString stringWithFormat: @"present storeKitVC (%@)", itemID]];
+                /// presentViewController
+                /// 특정 버전에서는 스토어 키트를 present 를 해야지만, loadProductWithParameters의 completionBlock 호출 됨.
+                [strongSelf presentViewController:storeKitVC animated:YES completion:nil];
             }];
         });
-        
-        __strong typeof(self) strongSelf = weakSelf;
-        if(!strongSelf) { return; }
-        [strongSelf appendToMyTextView:[NSString stringWithFormat: @"present storeKitVC (%@)", itemID]];
-        
-        /// presentViewController
-        /// 특정 버전에서는 스토어 키트를 present 를 해야지만, loadProductWithParameters의 completionBlock 호출 됨.
-        /// 버전 호환성을 위해서 loadProductWithParameters 호출 후, 이어서 바로 presentViewController 호출.
-        [strongSelf presentViewController:storeKitVC animated:YES completion:nil];
     });
 }
 
@@ -189,7 +178,7 @@
             return;
         }
         /// ERROR CASE #2
-        NSLog(@"resDict: %ld", [resDict[@"resultCount"] integerValue]);
+        NSLog(@"resultCount: %ld", [resDict[@"resultCount"] integerValue]);
         if([resDict[@"resultCount"] integerValue] <= 0) {
             completionHandler(nil, error);
             return;
