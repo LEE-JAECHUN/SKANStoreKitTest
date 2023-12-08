@@ -49,61 +49,42 @@
 - (void)loadProduct:(NSString *) itemID{
     
     __weak typeof(self) weakSelf = self;
-    NSMutableArray<NSData *> *resultArray = [NSMutableArray array];
     
-    /// Check  with the contry codes
-    dispatch_group_t group = dispatch_group_create();
-    NSArray *contryCodes = @[@"",[[NSLocale currentLocale] objectForKey:NSLocaleCountryCode]];
-    for (NSString *contryCode in contryCodes) {
-        dispatch_group_enter(group);
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            __strong typeof(self) strongSelf = weakSelf;
-            if(!strongSelf) { dispatch_group_leave(group); return; }
-            [strongSelf lookUpStoreItemById:itemID contryCode:contryCode completion:^(NSData * data, NSError * error) {
-                if(data != nil) { [resultArray addObject:data]; }
-                dispatch_group_leave(group);
-            }];
-        });
-    }
-    
-    
-    __block SKStoreProductViewController *storeKitVC = [[SKStoreProductViewController alloc] init];
-    storeKitVC.delegate = self;
-    NSDictionary *dict = @{ SKStoreProductParameterITunesItemIdentifier : itemID, };
-    
-    // waiting for two responses
-    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-        NSLog(@"dispatch_group_notify");
-        __block BOOL timedOut = NO;
-        dispatch_block_t timeoutWorkItem = dispatch_block_create(0, ^(){
-            timedOut = YES;
-            __strong typeof(self) strongSelf = weakSelf;
-            if(strongSelf){
-                [strongSelf appendToMyTextView:[NSString stringWithFormat:@"timeout"]];
-            }
-        });
-        
-        /// iTunesItem 식별자에 매칭되는 데이터가 없을 경우, 지정된 시간 (2초) 이내  타임아웃 이벤트 발생
-        if(![resultArray count]) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), timeoutWorkItem);
+    __block BOOL timedOut = NO;
+    /// 타임아웃 시, 실행할 코드 정의
+    dispatch_block_t timeoutWorkItem = dispatch_block_create(0, ^(){
+        NSLog(@"timedout");
+        timedOut = YES;
+        __strong typeof(self) strongSelf = weakSelf;
+        if(strongSelf){
+            [strongSelf appendToMyTextView:[NSString stringWithFormat:@"timeout"]];
         }
-        
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-            /// loadProductWithParameters
-            [storeKitVC loadProductWithParameters:dict completionBlock:^(BOOL result, NSError * _Nullable error) {
-                dispatch_block_cancel(timeoutWorkItem);
-                __strong typeof(self) strongSelf = weakSelf;
-                if(!strongSelf || timedOut) { return; }
-                if(error || result == NO) {
-                    [strongSelf appendToMyTextView:[NSString stringWithFormat:@"loadProductWithParameters error: %@", error]];
-                    return;
-                }
-                [strongSelf appendToMyTextView:[NSString stringWithFormat: @"present storeKitVC (%@)", itemID]];
-                /// presentViewController
-                /// 특정 버전에서는 스토어 키트를 present 를 해야지만, loadProductWithParameters의 completionBlock 호출 됨.
-                [strongSelf presentViewController:storeKitVC animated:YES completion:nil];
-            }];
-        });
+    });
+    
+    /// 지정된 시간 이후, 타임아웃 디스패치 큐 실행
+    dispatch_time_t dispatchTime = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC));
+    dispatch_after(dispatchTime, dispatch_get_main_queue(), timeoutWorkItem);
+    
+    SKStoreProductViewController *storeKitVC = [[SKStoreProductViewController alloc] init];
+    storeKitVC.delegate = self;
+    
+    /// loadProductWithParameters:completionBlock:  메소드 호출
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        /// loadProductWithParameters
+        NSDictionary *dict = @{ SKStoreProductParameterITunesItemIdentifier : itemID, };
+        [storeKitVC loadProductWithParameters:dict completionBlock:^(BOOL result, NSError * _Nullable error) {
+            dispatch_block_cancel(timeoutWorkItem);
+            __strong typeof(self) strongSelf = weakSelf;
+            if(!strongSelf || timedOut) { return; }
+            if(error || result == NO) {
+                [strongSelf appendToMyTextView:[NSString stringWithFormat:@"loadProductWithParameters error: %@", error]];
+                return;
+            }
+            [strongSelf appendToMyTextView:[NSString stringWithFormat: @"present storeKitVC (%@)", itemID]];
+            /// presentViewController
+            /// 특정 버전에서는 스토어 키트를 present 를 해야지만, loadProductWithParameters의 completionBlock 호출 됨.
+            [strongSelf presentViewController:storeKitVC animated:YES completion:nil];
+        }];
     });
 }
 
